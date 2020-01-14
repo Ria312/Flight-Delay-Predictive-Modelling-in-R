@@ -1,0 +1,383 @@
+---
+title: "Stat_652"
+author: "Ria Gupta"
+date: "06/12/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Reading flight data
+
+The data are on flights from three New York City airports 
+in 2013, from the `nycflights13` package. 
+Data were combined from four datasets from this package:
+
+```{r}
+library(tidyverse)
+library(nycflights13)
+#help(flights)
+#help(weather)
+#help(airports)
+#help(planes)
+fltrain <- read.csv("C:\\Users\\Karan\\Downloads\\stat\\project\\fltrain.csv.gz")
+```
+
+
+```{r}
+dim(fltrain)
+
+```
+
+There are 43 variables measured on 200,000 flights. 
+
+
+##Converting character to factor variables
+```{r}
+fl <- fltrain
+for(i in 1:ncol(fl)) {
+  if(typeof(fl[[i]]) == "character") {
+    fl[[i]] <- factor(fl[[i]])
+  }
+}
+
+```
+## Missing data
+
+
+### Calculating percentage of missing values for each column
+
+```{r}
+p<-function(x) {sum(is.na(x))/length(x)*100}
+apply(fl,2,p)
+
+```
+### Action:
+From above missing values percentage we observe, that predictors such as wind_gust, pressure, type, manufacturer, model,engines,seats, engine, speed have more than 5% values missing. From thumb of rule, we remove these variables.
+
+```{r}
+
+fl <- fl%>% 
+  select(-type,-manufacturer,-model,-engines,-seats, -speed, -engine,-wind_gust,-pressure,-year.y)
+
+```
+
+###to omit the rows with missing data
+
+```{r}
+
+fl <- na.omit(fl)
+summary(fl)
+
+```
+
+### Summaries of the response variable `dep_delay`
+
+The departure delays variable is highly right-skewed.
+
+```{r}
+
+range(fl$dep_delay)
+fivenum(fl$dep_delay)
+quantile(fl$dep_delay,probs = c(0.01,0.05,0.1,0.25,.5,.75,.90,.95,.99))
+mean(fl$dep_delay >= 60) # about 15,000 or 8% of flights
+
+```
+
+###Summaries of departure delay by NYC airport:
+```{r}
+
+Q3 <- function(x) { quantile(x,probs=.75) }
+fl %>% group_by(origin) %>% 
+  summarize(n=n(),med_d = median(dep_delay),Q3_d = Q3(dep_delay), max_d = max(dep_delay)) %>% 
+  arrange(desc(Q3_d)) %>% head(10) 
+
+```
+
+###Summaries of departure delay by airline (carrier).
+
+```{r}
+
+fl %>% group_by(carrier) %>% 
+  summarize(n=n(),med_d = median(dep_delay),Q3_d = Q3(dep_delay), max_d = max(dep_delay)) %>% 
+  arrange(desc(Q3_d)) %>% head(10) 
+fl %>% group_by(origin,carrier) %>% 
+  summarize(n=n(),med_d = median(dep_delay),Q3_d = Q3(dep_delay), max_d = max(dep_delay)) %>% 
+  arrange(desc(Q3_d)) %>% head(10) 
+fl %>% group_by(dest,carrier) %>% 
+  summarize(n=n(),med_d = median(dep_delay),Q3_d = Q3(dep_delay), max_d = max(dep_delay)) %>% 
+  arrange(desc(Q3_d)) %>% head(10) 
+
+```
+
+###Summaries of departure delay by date:
+  
+```{r}
+
+fl %>% group_by(month,day) %>% 
+  summarize(n=n(),med_d = mean(dep_delay),max_d = max(dep_delay)) %>% 
+  arrange(desc(med_d)) %>% head(10) 
+
+```
+
+
+###Summaries of departure delay by precipitation:
+```{r}
+
+fl %>% mutate(haveprecip = factor(precip>0)) %>% group_by(haveprecip) %>% 
+  summarize(n=n(),med_d = median(dep_delay),Q3_d = Q3(dep_delay), max_d = max(dep_delay)) %>% 
+  arrange(desc(med_d)) %>% head(10) 
+
+```
+
+### Ranking and scaling dep_delay
+
+```{r}
+
+den <- nrow(fl)+1
+fl <- fl %>% mutate(dep_delay = rank(dep_delay)/den)
+ggplot(fl,aes(x=dep_delay)) + geom_histogram(binwidth=.01)
+
+```
+
+###data wrangling
+
+```{r}
+
+library(lubridate)
+fl <- fl %>% 
+  mutate(dep_date = make_date(year.x,month,day)) %>% 
+  select(-year.x,-month,-day,-dep_time,-arr_time,-arr_delay,
+         -sched_arr_time,-tailnum,-flight,-name,-air_time,
+         -hour,-minute,-time_hour,-tz,-dst,-dest) %>%
+  mutate(precip = as.numeric(precip>0))
+fl <- mutate(fl,logalt = log(alt)) %>% select(-alt)
+fl <- mutate(fl,logdistance = log(distance)) %>% select(-distance)
+
+```
+
+
+## Associations between `dep_delay` and quantitative predictors
+
+
+```{r,eval=FALSE}
+
+ggplot(fl,aes(x=dep_date,y=dep_delay)) + geom_point(alpha=.01) + geom_smooth()
+
+ggplot(fl,aes(x=sched_dep_time,y=dep_delay)) + geom_point(alpha=0.01) + geom_smooth()
+
+
+ggplot(fl,aes(x=log(distance),y=dep_delay)) + geom_point(alpha=0.01) + geom_smooth()
+
+
+ggplot(fl,aes(x=temp,y=dep_delay)) + geom_point(alpha=0.01) + geom_smooth()
+
+ggplot(fl,aes(x=dewp,y=dep_delay)) + geom_point(alpha=0.01) + geom_smooth()
+
+```
+
+
+## Split training set in two for tuning
+
+```{r}
+
+set.seed(123)
+tr_size <- ceiling(2*nrow(fl)/3)
+train <- sample(1:nrow(fl),size=tr_size)
+fl_tr <- fl[train,]
+fl_te <- fl[-train,]
+
+```
+
+
+## Learning methods
+
+
+###Random Forest
+```{r,eval=FALSE}
+
+library(randomForest)
+rf.fit=randomForest(dep_delay∼.,data=fl_tr[-5], mtry=6,importance=TRUE,ntree=100) 
+
+```
+
+###GAM
+
+
+```{r}
+
+library(gam)
+form <- formula(dep_delay ~ s(dep_date) + s(sched_dep_time) + carrier + origin +tzone  + s(logdistance) +
+                  s(temp) + s(dewp) + s(humid) + s(wind_dir) + s(wind_speed) + precip + s(visib))
+gam_fit <- gam(form, data=fl_tr,family=gaussian) 
+summary(gam_fit)
+plot(gam_fit,se=TRUE)
+gam_pred <- predict(gam_fit,newdata=fl_te)
+mse_gam <- mean((fl_te$dep_delay-gam_pred)^2)
+mse_gam
+
+```
+
+
+###Gradient Boost running with default hyperparameters
+
+
+```{r,eval=FALSE}
+
+library(gbm)
+dep_date_numeric <- as.numeric(fl_tr$dep_date)
+dep_date_numeric <- dep_date_numeric - mean(dep_date_numeric)
+fl_tr_tem <- mutate(fl_tr,dep_date = dep_date_numeric)
+gbm_fit <-gbm(dep_delay ~ .,data=fl_tr_tem,distribution="gaussian",
+              n.trees = 1000, shrinkage = 0.01,interaction.depth = 1)
+
+dep_date_numeric <- as.numeric(fl_te$dep_date)
+dep_date_numeric <- dep_date_numeric - mean(dep_date_numeric)
+fl_te_tem <- mutate(fl_te,dep_date = dep_date_numeric)
+
+gbm_pred <- predict(gbm_fit,newdata=fl_te_tem,n.trees = 1000)
+mse_gbm <- mean((fl_te$dep_delay-gbm_pred)^2)
+mse_gbm
+
+```
+
+
+##Hyper Tuning of GBM
+
+```{r, eval=FALSE}
+
+dvalues <- matrix(ncol=3,nrow = 4)
+ntrees_list<-c(1000,2000)
+list_shrink<-c(0.1,0.2)
+j<-1
+for(tree_i in ntrees_list)
+{
+  for(shrinkage_k in list_shrink){
+    gbm_fit <-gbm(dep_delay ~ .,data=fl_tr_tem,distribution="gaussian",
+                  n.trees = tree_i, shrinkage = shrinkage_k, interaction.depth = 3)
+    
+    gbm_pred <- predict(gbm_fit,newdata=fl_te_tem,n.trees =tree_i)
+    mse_gbm <- mean((fl_te$dep_delay-gbm_pred)^2)
+    dvalues[j,1] <- tree_i
+    dvalues[j,2] <- shrinkage_k
+    dvalues[j,3] <- mse_gbm
+    j<-j+1
+    
+  }
+  }
+ index<-which(dvalues[,3] == min(dvalues[,3]), arr.ind = T) 
+ best_tree<-dvalues[index,1]
+ best_shrink<-dvalues[index,2]
+```
+###Analyzing mse_list, the last value of parameters, shrinkage=0.2 and trees=2000 give best result.
+
+###Training with tuned paramaters
+
+```{r,eval=TRUE}
+
+library(gbm)
+dep_date_numeric <- as.numeric(fl_tr$dep_date)
+dep_date_numeric <- dep_date_numeric - mean(dep_date_numeric)
+fl_tr_tem <- mutate(fl_tr,dep_date = dep_date_numeric)
+gbm_fit <-gbm(dep_delay ~ .,data=fl_tr_tem,distribution="gaussian",
+              n.trees = 2000, shrinkage = 0.2,interaction.depth = 3)
+
+dep_date_numeric <- as.numeric(fl_te$dep_date)
+dep_date_numeric <- dep_date_numeric - mean(dep_date_numeric)
+fl_te_tem <- mutate(fl_te,dep_date = dep_date_numeric)
+
+gbm_pred <- predict(gbm_fit,newdata=fl_te_tem,n.trees = 2000)
+mse_gbm <- mean((fl_te$dep_delay-gbm_pred)^2)
+mse_gbm
+
+```
+
+
+##Tree
+
+```{r}
+
+library(tree)
+tree.pred<-tree(dep_delay ~., data=fl_tr_tem)
+yhat=predict(tree.pred ,newdata=fl_te_tem) 
+tree.test=fl_te_tem$dep_delay
+
+```
+
+
+```{r}
+
+plot(tree.pred)
+text(tree.pred,cex=.8)
+
+```
+
+
+```{r}
+
+mse_t<-mean((yhat -tree.test)^2)
+mse_t
+
+```
+
+
+##Using xgboost
+```{r}
+
+library(xgboost)
+classifier = xgboost(data = data.matrix(fl_tr_tem[-2]), label = fl_tr_tem$dep_delay, nrounds =100)
+xgb_pred<-predict(classifier,data.matrix(fl_te_tem[-2]))
+mse_xgb<-mean((xgb_pred- fl_te_tem[,2])^2)
+mse_xgb
+
+```
+
+##Running on Test Set
+
+###Prepare Test Data and perform same preprocessing as while during training
+###Predicting Fitted Tuned Model on Test Set
+```{r}
+
+fltest <- read.csv("C:\\Users\\Karan\\Downloads\\stat\\project\\fltest.csv.gz")
+flt <- fltest
+for(i in 1:ncol(fl)) {
+  if(typeof(fl[[i]]) == "character") {
+    flt[[i]] <- factor(flt[[i]])
+  }
+}
+
+p<-function(x) {sum(is.na(x))/length(x)*100}
+apply(flt,2,p)
+flt <- flt%>% 
+  select(-type,-manufacturer,-model,-engines,-seats, -speed, -engine,-wind_gust,-pressure,-year.y)
+
+flt <- na.omit(flt)
+
+dent <- nrow(flt)+1
+flt <- flt %>% mutate(dep_delay = rank(dep_delay)/dent)
+
+flt <- flt %>% 
+  mutate(dep_date = make_date(year.x,month,day)) %>% 
+  select(-year.x,-month,-day,-dep_time,-arr_time,-arr_delay,
+         -sched_arr_time,-tailnum,-flight,-name,-air_time,
+         -hour,-minute,-time_hour,-tz,-dst,-dest) %>%
+  mutate(precip = as.numeric(precip>0))
+
+flt <- mutate(flt,logdistance = log(distance)) %>% select(-distance)
+flt <- mutate(flt,logalt = log(alt)) %>% select(-alt)
+flt <- flt %>% mutate(dep_delay = rank(dep_delay)/dent)
+dep_date_numeric <- as.numeric(flt$dep_date)
+dep_date_numeric <- dep_date_numeric - mean(dep_date_numeric)
+flt <- mutate(flt,dep_date = dep_date_numeric)
+
+gbm_pred_t <- predict(gbm_fit,newdata=flt,n.trees = 2000)
+
+mse_gbm <- mean((flt$dep_delay-gbm_pred_t)^2)
+mse_gbm
+
+```
+
+
+
